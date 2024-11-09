@@ -39,11 +39,14 @@ int main()
         while (1)
         {
             cJSON *json = receive_data();
-            if (json != NULL){
+            if (json != NULL)
+            {
                 process_data(json); // 处理 JSON 数据
                 json_updated = 1;   // 标记 JSON 数据已更新
                 cJSON_Delete(json); // 清理 JSON 对象
-            } else {
+            }
+            else
+            {
                 break;
             }
             if (json_updated)
@@ -143,18 +146,21 @@ void process_data(cJSON *json)
     }
     else if (strcmp(cmd_type, "update") == 0)
     {
-        cJSON *parameter_item = cJSON_GetObjectItem(json, "parameter");
-        cJSON *data_item = cJSON_GetObjectItem(json, "data");
-        char *parameter = parameter_item->valuestring;
-        char *data = data_item->valuestring;
         pthread_mutex_lock(&ins_mutex);
         if (ins == 2)
         {
-            update_generater(parameter, data);
+            cJSON *waveform_item = cJSON_GetObjectItem(json, "waveform");
+            cJSON *frequency_item = cJSON_GetObjectItem(json, "frequency");
+            cJSON *amplitude_item = cJSON_GetObjectItem(json, "amplitude");
+
+            int waveform = waveform_item ? waveform_item->valueint : -1;
+            int frequency = frequency_item ? frequency_item->valueint : -1;
+            int amplitude = amplitude_item ? amplitude_item->valueint : -1;
+            update_generater(waveform, frequency, amplitude);
         }
         else if (ins == 1)
         {
-            update_scope(parameter, data);
+            // update_scope(parameter, data);
         }
         pthread_mutex_unlock(&ins_mutex);
     }
