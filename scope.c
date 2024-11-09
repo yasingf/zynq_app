@@ -6,7 +6,7 @@
 
 int send_wave() {
     uintptr_t address = 0x30000100; // 要读取的地址
-    size_t read_len = 3750; // 读取的字节长度，这里假设读取3750字节
+    size_t read_len = 300; // 读取的字节长度，这里假设读取3750字节
     uint8_t buffer[read_len];
 
     // 从 DDR 中读取数据

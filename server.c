@@ -54,15 +54,10 @@ int server_init(const char *ip, int port)
     return 0;
 }
 
-/**
- * @brief 等待客户端连接并接受 JSON 数据
- * @return cJSON* 接受到的 JSON 对象，失败返回 NULL
- */
-cJSON* server_listen()
+void wait_for_connection()
 {
     struct sockaddr_in client_addr;
     socklen_t addr_len = sizeof(client_addr);
-    char buffer[1024] = {0};
 
     // 等待客户端连接
     printf("Waiting for client connection...\n");
@@ -70,9 +65,16 @@ cJSON* server_listen()
     if (client_socket < 0)
     {
         perror("Accept failed");
-        return NULL;
+        return;
     }
+
     printf("Client connected: %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+}
+
+// 接收数据并返回解析后的 JSON 对象
+cJSON *receive_data()
+{
+    char buffer[1024] = {0};
 
     // 接收数据
     ssize_t recv_len = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
@@ -81,6 +83,7 @@ cJSON* server_listen()
         perror("Receive failed");
         return NULL;
     }
+
     buffer[recv_len] = '\0'; // 确保字符串以空字符结束
 
     // 解析 JSON 数据
@@ -137,7 +140,7 @@ int server_send(cJSON *json_data)
         return -1;
     }
 
-    printf("Sent JSON data with header: %s\n", json_str);
+    // printf("Sent JSON data with header: %s\n", json_str);
 
     // 清理
     free(json_str);

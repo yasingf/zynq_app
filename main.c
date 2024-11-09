@@ -13,42 +13,59 @@
 
 void *send_wave_thread(void *arg); // 声明发送波形线程
 void process_data(cJSON *json);    // 处理 JSON 数据
+void stop_wave_thread();           // 停止波形线程的函数
+
 int ins = 0;
+pthread_t wave_thread;
+pthread_mutex_t ins_mutex = PTHREAD_MUTEX_INITIALIZER;
+int wave_thread_running = 0; // 表示波形线程是否正在运行的标志
+int wave_thread_exit = 0;    // 表示波形线程是否应退出
+int json_updated = 0;        // 新的 JSON 数据标志
 
 int main()
 {
     ddr_init(0x30000000, 268435456); // 初始化 DDR
 
+    // 初始连接服务器
     if (server_init(SERVER_IP, SERVER_PORT) < 0)
     {
         fprintf(stderr, "Failed to initialize server\n");
         exit(EXIT_FAILURE);
     }
 
-    pthread_t wave_thread; // 声明线程
     while (1)
     {
-        // 接收 JSON 数据
-        cJSON *json = server_listen();
-        if (json)
+        wait_for_connection();
+        while (1)
         {
-            process_data(json); // 处理 JSON 数据
-            cJSON_Delete(json); // 清理 JSON 对象
-        }
-
-        // 在需要发送波形时启动线程
-        if (ins == 1)
-        {
-            if (pthread_create(&wave_thread, NULL, send_wave_thread, NULL) != 0)
-            {
-                perror("Failed to create thread");
-                exit(EXIT_FAILURE);
+            cJSON *json = receive_data();
+            if (json != NULL){
+                process_data(json); // 处理 JSON 数据
+                json_updated = 1;   // 标记 JSON 数据已更新
+                cJSON_Delete(json); // 清理 JSON 对象
+            } else {
+                break;
             }
-            pthread_detach(wave_thread); // 分离线程，确保资源自动回收
-        }
-        else if (ins == 2)
-        {
-            printf("信号发生器\n");
+            if (json_updated)
+            {
+                // 检查是否需要启动波形发送线程
+                pthread_mutex_lock(&ins_mutex);
+                if (ins == 1 && !wave_thread_running)
+                {
+                    wave_thread_running = 1;
+                    wave_thread_exit = 0;
+                    if (pthread_create(&wave_thread, NULL, send_wave_thread, NULL) != 0)
+                    {
+                        perror("Failed to create wave thread");
+                        wave_thread_running = 0;
+                    }
+                    pthread_detach(wave_thread); // 分离线程，确保资源自动回收
+                }
+                pthread_mutex_unlock(&ins_mutex);
+
+                // 处理完后重置 json_updated，防止再次进入第二个 while 循环
+                json_updated = 0;
+            }
         }
     }
 
@@ -58,19 +75,50 @@ int main()
 
 void *send_wave_thread(void *arg)
 {
-    // 发送波形的函数
     while (1)
     {
-        send_wave();
+        pthread_mutex_lock(&ins_mutex);
+        if (wave_thread_exit)
+        {
+            wave_thread_running = 0;
+            pthread_mutex_unlock(&ins_mutex);
+            printf("Wave thread is exiting...\n"); // 输出线程退出日志
+            break;                                 // 退出线程
+        }
+        pthread_mutex_unlock(&ins_mutex);
+
+        send_wave(); // 执行发送波形的功能
     }
 
-    // 执行发送波形的功能
-    return NULL; // 返回 NULL
+    return NULL;
+}
+
+void stop_wave_thread()
+{
+    pthread_mutex_lock(&ins_mutex);
+    if (wave_thread_running)
+    {
+        wave_thread_exit = 1;                // 设置退出标志
+        printf("Stopping wave thread...\n"); // 输出停止线程日志
+        pthread_mutex_unlock(&ins_mutex);
+
+        // 等待线程退出
+        while (wave_thread_running)
+        {
+            usleep(10000); // 等待线程退出
+        }
+    }
+    else
+    {
+        pthread_mutex_unlock(&ins_mutex);
+    }
+
+    ins = 0; // 重置仪器状态
+    printf("Wave thread stopped, returning to default state.\n");
 }
 
 void process_data(cJSON *json)
 {
-    // 从 JSON 对象中获取 cmd_type
     cJSON *cmd_type_item = cJSON_GetObjectItem(json, "cmd_type");
     if (cmd_type_item == NULL || !cJSON_IsString(cmd_type_item))
     {
@@ -78,7 +126,7 @@ void process_data(cJSON *json)
         return;
     }
 
-    const char *cmd_type = cmd_type_item->valuestring; // 获取 cmd_type 字符串
+    const char *cmd_type = cmd_type_item->valuestring;
 
     if (strcmp(cmd_type, "switch") == 0)
     {
@@ -87,8 +135,10 @@ void process_data(cJSON *json)
         if (ins_item && cJSON_IsString(ins_item))
         {
             ins_switch(ins_item->valuestring); // 切换仪器
+            pthread_mutex_lock(&ins_mutex);
             ins = (strcmp(ins_item->valuestring, "scope") == 0) ? 1 : (strcmp(ins_item->valuestring, "generator") == 0) ? 2
                                                                                                                         : 0;
+            pthread_mutex_unlock(&ins_mutex);
         }
     }
     else if (strcmp(cmd_type, "update") == 0)
@@ -97,6 +147,7 @@ void process_data(cJSON *json)
         cJSON *data_item = cJSON_GetObjectItem(json, "data");
         char *parameter = parameter_item->valuestring;
         char *data = data_item->valuestring;
+        pthread_mutex_lock(&ins_mutex);
         if (ins == 2)
         {
             update_generater(parameter, data);
@@ -105,15 +156,16 @@ void process_data(cJSON *json)
         {
             update_scope(parameter, data);
         }
+        pthread_mutex_unlock(&ins_mutex);
     }
     else if (strcmp(cmd_type, "exitins") == 0)
     {
-        printf("返回默认");
-        ins = 0;
+        printf("Returning to default state...\n");
+        stop_wave_thread(); // 停止波形线程
     }
     else if (strcmp(cmd_type, "custom") == 0)
     {
-        printf("接受自定义仪器中...\n");
+        printf("Switching to custom instrument...\n");
         cJSON *custom_item = cJSON_GetObjectItem(json, "custom_instrument");
         if (custom_item && cJSON_IsNumber(custom_item))
         {
